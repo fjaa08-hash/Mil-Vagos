@@ -498,6 +498,16 @@
   }
   .ledger-icons{display:flex; gap:6px; justify-content:flex-end; margin-top:6px;}
 
+  /* Barra deslizadora vertical de toda la app */
+  #pageScroll{ position:fixed; right:1px; top:12px; bottom:12px; width:18px; z-index:25; display:none; touch-action:none; }
+  #pageScroll .rail{ position:absolute; left:7px; top:0; bottom:0; width:4px; border-radius:3px; background:rgba(255,255,255,.16); }
+  #pageScroll .thumb{
+    position:absolute; left:2px; width:14px; min-height:52px; border-radius:10px;
+    background:linear-gradient(180deg,#FFFFFF,#B57BFF 55%,#8B3FE0);
+    box-shadow:0 1px 4px rgba(0,0,0,.55); cursor:grab; touch-action:none; opacity:.9;
+  }
+  #pageScroll.drag .thumb{ cursor:grabbing; opacity:1; box-shadow:0 0 0 3px rgba(181,123,255,.35), 0 1px 4px rgba(0,0,0,.55); }
+
   .install-btn{
     background:rgba(255,248,238,.12);
     border:1px solid rgba(255,248,238,.25);
@@ -819,6 +829,8 @@
     <p class="helper" style="text-align:center; margin-top:10px;">"Enviar imagen" abre el menú para compartir de tu celular con la factura ya adjunta — solo elige WhatsApp y el contacto. Si tu navegador no lo permite, descárgala y adjúntala manualmente.</p>
   </div>
 </div>
+
+<div id="pageScroll" aria-hidden="true"><div class="rail"></div><div class="thumb" id="pageScrollThumb"></div></div>
 
 <div class="toast" id="toast"></div>
 
@@ -3435,6 +3447,58 @@ function getFirebaseAuthInstance(){
 
   // Instalación como app (PWA)
   let deferredInstallPrompt = null;
+  // Barra deslizadora vertical de la página: se arrastra con el dedo para subir y bajar
+  (function setupPageScrollbar(){
+    const bar = $('pageScroll'), thumb = $('pageScrollThumb');
+    if (!bar || !thumb) return;
+    const root = () => document.scrollingElement || document.documentElement;
+    let dragging = false, startY = 0, startTop = 0;
+
+    function update(){
+      const r = root();
+      const maxScroll = r.scrollHeight - window.innerHeight;
+      const show = maxScroll > 40;
+      bar.style.display = show ? 'block' : 'none';
+      if (!show) return;
+      const trackH = bar.clientHeight;
+      const thumbH = Math.max(52, (window.innerHeight / r.scrollHeight) * trackH);
+      const maxTop = Math.max(1, trackH - thumbH);
+      thumb.style.height = thumbH + 'px';
+      if (!dragging) thumb.style.top = ((r.scrollTop / maxScroll) * maxTop) + 'px';
+    }
+    function scrollToThumbTop(top){
+      const r = root();
+      const maxScroll = r.scrollHeight - window.innerHeight;
+      const maxTop = Math.max(1, bar.clientHeight - thumb.clientHeight);
+      const t = Math.min(maxTop, Math.max(0, top));
+      thumb.style.top = t + 'px';
+      window.scrollTo(0, (t / maxTop) * maxScroll);
+    }
+
+    thumb.addEventListener('pointerdown', (e) => {
+      dragging = true; startY = e.clientY; startTop = parseFloat(thumb.style.top) || 0;
+      bar.classList.add('drag');
+      try{ thumb.setPointerCapture(e.pointerId); }catch(err){}
+      e.preventDefault();
+    });
+    thumb.addEventListener('pointermove', (e) => { if (dragging) scrollToThumbTop(startTop + (e.clientY - startY)); });
+    const end = () => { dragging = false; bar.classList.remove('drag'); update(); };
+    thumb.addEventListener('pointerup', end);
+    thumb.addEventListener('pointercancel', end);
+    // tocar el riel salta a ese punto
+    bar.addEventListener('pointerdown', (e) => {
+      if (e.target === thumb) return;
+      const rect = bar.getBoundingClientRect();
+      scrollToThumbTop(e.clientY - rect.top - thumb.clientHeight / 2);
+    });
+
+    window.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    if (window.ResizeObserver) new ResizeObserver(update).observe(document.body);
+    document.addEventListener('click', () => setTimeout(update, 60), true);   // al cambiar de pestaña cambia el largo
+    update();
+  })();
+
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredInstallPrompt = e;
