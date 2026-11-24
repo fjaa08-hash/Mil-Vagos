@@ -1,5 +1,5 @@
 // Service worker simple: primero red, y si no hay internet usa la copia guardada.
-const CACHE = 'mil-vagos-v1';
+const CACHE = 'mill-vagos-v2';
 const CORE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).catch(() => {}));
