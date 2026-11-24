@@ -1912,18 +1912,40 @@ function getFirebaseAuthInstance(){
     }
   }
 
+  // Lee la tasa venga como número o como texto con formato venezolano
+  // ("1.011,39"), inglés ("1,011.39") o simple ("1011.39").
+  function parseRate(v){
+    if (typeof v === 'number') return isFinite(v) ? v : NaN;
+    const s0 = String(v == null ? '' : v).trim().replace(/[^\d.,]/g, '');
+    if (!s0) return NaN;
+    let s = s0;
+    const lastDot = s.lastIndexOf('.'), lastComma = s.lastIndexOf(',');
+    if (lastDot > -1 && lastComma > -1){
+      s = lastComma > lastDot ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+    } else if (lastComma > -1){
+      s = /^\d{1,3}(,\d{3})+$/.test(s) ? s.replace(/,/g, '') : s.replace(',', '.');
+    } else if ((s.match(/\./g) || []).length > 1){
+      s = s.replace(/\./g, '');
+    } else if (/^\d{1,3}\.\d{3}$/.test(s) && parseFloat(s) < 20){
+      s = s.replace('.', '');       // "1.011" = mil once, no uno coma cero once
+    }
+    return parseFloat(s);
+  }
+  // El euro BCV ronda los cientos o miles de Bs: un valor menor a 20 es una lectura mala.
+  const rateOk = (r) => isFinite(r) && r >= 20;
+
   async function fetchBCVRate(){
     // Fuente 1
     try{
       const data = await fetchWithTimeout('https://bcv-api-ashy.vercel.app/api/tasa', 4000);
-      const rate = parseFloat(data?.bcv?.eur);
-      if (rate > 0) return rate;
+      const rate = parseRate(data?.bcv?.eur);
+      if (rateOk(rate)) return rate;
     }catch(e){ /* seguimos con la siguiente fuente */ }
     // Fuente 2
     try{
       const data = await fetchWithTimeout('https://thehermit007.github.io/Quadra_API/data.json', 4000);
-      const rate = parseFloat(data?.rates?.EUR);
-      if (rate > 0) return rate;
+      const rate = parseRate(data?.rates?.EUR);
+      if (rateOk(rate)) return rate;
     }catch(e){ /* sin suerte tampoco */ }
     return null;
   }
@@ -1936,14 +1958,14 @@ function getFirebaseAuthInstance(){
     const rate = await fetchBCVRate();
     if (rate){
       bcvCache = { rate, fetchedAt: now };
-      try{ await window.storage.set('bcvRateCache', JSON.stringify(bcvCache), false); }catch(e){}
+      try{ await window.storage.set('bcvRateCache2', JSON.stringify(bcvCache), false); }catch(e){}
       return bcvCache;
     }
     // Sin internet o las dos fuentes fallaron: usa el último valor guardado.
     if (!bcvCache){
       try{
-        const stored = await window.storage.get('bcvRateCache', false);
-        if (stored) bcvCache = JSON.parse(stored.value);
+        const stored = await window.storage.get('bcvRateCache2', false);
+        if (stored){ const c = JSON.parse(stored.value); if (c && rateOk(c.rate)) bcvCache = c; }
       }catch(e){}
     }
     return bcvCache;
@@ -2206,7 +2228,7 @@ function getFirebaseAuthInstance(){
       ctx.textAlign = 'left';
       ctx.font = '400 14px Inter, sans-serif';
       const fecha = new Date(bcv.fetchedAt).toLocaleDateString('es-VE');
-      ctx.fillText(`Tasa BCV: ${bcv.rate.toLocaleString('es-VE',{minimumFractionDigits:2})} Bs/€ (${fecha})`, 60, y);
+      ctx.fillText(`Tasa BCV: ${bcv.rate.toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})} Bs/€ (${fecha})`, 60, y);
     }
 
     // Caja de métodos de pago
@@ -2347,12 +2369,12 @@ function getFirebaseAuthInstance(){
       });
       msg += `*TOTAL A PAGAR: ${fmtMoney(payment.remaining)}*\n`;
       if (bcvCache && payment.remaining > 0) {
-        msg += `≈ ${fmtBs(payment.remaining * bcvCache.rate)} (tasa BCV ${bcvCache.rate.toLocaleString('es-VE',{minimumFractionDigits:2})} Bs/€)\n`;
+        msg += `≈ ${fmtBs(payment.remaining * bcvCache.rate)} (tasa BCV ${bcvCache.rate.toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})} Bs/€)\n`;
       }
     } else {
       msg += `\nTotal: ${fmtMoney(payment.total)}\n`;
       if (bcvCache) {
-        msg += `≈ ${fmtBs(payment.total * bcvCache.rate)} (tasa BCV ${bcvCache.rate.toLocaleString('es-VE',{minimumFractionDigits:2})} Bs/€)\n`;
+        msg += `≈ ${fmtBs(payment.total * bcvCache.rate)} (tasa BCV ${bcvCache.rate.toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})} Bs/€)\n`;
       }
     }
     msg += `\n💳 *MÉTODOS DE PAGO*\n`;
