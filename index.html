@@ -740,6 +740,22 @@
     </div>
 
     <div class="settings-block">
+      <h3>Tasa del día (Bs por 1 €)</h3>
+      <p>La factura convierte el monto a bolívares con esta tasa. Si escribes la tasa BCV aquí, la app siempre la usa; si no, intenta obtenerla sola por internet.</p>
+      <div class="row2">
+        <div class="field" style="margin-bottom:0;">
+          <input id="manualRateInput" type="text" inputmode="decimal" placeholder="Ej: 1011,39">
+        </div>
+        <div class="field" style="margin-bottom:0; max-width:120px;">
+          <button class="btn-main" id="saveRateBtn" type="button" style="padding:11px;">Guardar</button>
+        </div>
+      </div>
+      <div class="helper" id="rateStatus" style="margin-top:8px;"></div>
+      <button class="btn-main secondary" id="autoRateBtn" type="button">Probar tasa automática</button>
+      <button class="btn-main secondary" id="clearRateBtn" type="button" style="display:none;">Quitar mi tasa y usar la automática</button>
+    </div>
+
+    <div class="settings-block">
       <h3>Copia de seguridad</h3>
       <p>La app respalda sola tus datos en la nube cada vez que cambias algo. Además, una vez al día guarda una copia en tu Google Drive: toca el botón, elige "Drive" en el menú y confirma. Si cambias de celular, entrando con tu correo y contraseña se recuperan los datos.</p>
       <button class="btn-main" id="shareBackupBtn">📤 Enviar copia a Drive / WhatsApp</button>
@@ -1934,24 +1950,56 @@ function getFirebaseAuthInstance(){
   // El euro BCV ronda los cientos o miles de Bs: un valor menor a 20 es una lectura mala.
   const rateOk = (r) => isFinite(r) && r >= 20;
 
+  let lastRateSource = '';
   async function fetchBCVRate(){
+    lastRateSource = '';
+    // Fuente 0: Frankfurter (publica la tasa oficial del BCV, gratis y sin clave)
+    try{
+      const data = await fetchWithTimeout('https://api.frankfurter.dev/v2/providers/bcv/rate/EUR/VES', 5000);
+      const rate = parseRate(data?.rate);
+      if (rateOk(rate)){ lastRateSource = 'Frankfurter (BCV)'; return rate; }
+    }catch(e){ /* seguimos con la siguiente fuente */ }
     // Fuente 1
     try{
       const data = await fetchWithTimeout('https://bcv-api-ashy.vercel.app/api/tasa', 4000);
       const rate = parseRate(data?.bcv?.eur);
-      if (rateOk(rate)) return rate;
+      if (rateOk(rate)){ lastRateSource = 'bcv-api'; return rate; }
     }catch(e){ /* seguimos con la siguiente fuente */ }
     // Fuente 2
     try{
       const data = await fetchWithTimeout('https://thehermit007.github.io/Quadra_API/data.json', 4000);
       const rate = parseRate(data?.rates?.EUR);
-      if (rateOk(rate)) return rate;
+      if (rateOk(rate)){ lastRateSource = 'Quadra'; return rate; }
     }catch(e){ /* sin suerte tampoco */ }
+    // Fuente 3
+    try{
+      const data = await fetchWithTimeout('https://ve.dolarapi.com/v1/cotizaciones/eur', 4000);
+      const rate = parseRate(data?.promedio ?? data?.venta ?? data?.compra);
+      if (rateOk(rate)){ lastRateSource = 'DolarApi'; return rate; }
+    }catch(e){ /* sin suerte */ }
+    return null;
+  }
+
+  // Tasa escrita a mano por el dueño (Ajustes): tiene prioridad sobre la automática.
+  async function loadManualRate(){
+    try{
+      const r = await window.storage.get('bcvManualRate', false);
+      if (r && r.value){
+        const m = JSON.parse(r.value);
+        if (m && rateOk(m.rate)) return m;
+      }
+    }catch(e){}
     return null;
   }
 
   async function getBCVRate(){
     const now = Date.now();
+    const manual = await loadManualRate();
+    if (manual){
+      bcvCache = { rate: manual.rate, fetchedAt: manual.savedAt || now, manual: true };
+      return bcvCache;
+    }
+    if (bcvCache && bcvCache.manual) bcvCache = null;   // se quitó la tasa manual
     if (bcvCache && (now - bcvCache.fetchedAt) < 6 * 60 * 60 * 1000){
       return bcvCache; // reutiliza si se pidió hace menos de 6 horas
     }
@@ -1975,6 +2023,44 @@ function getFirebaseAuthInstance(){
     n = Number(n) || 0;
     return 'Bs. ' + n.toLocaleString('es-VE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
   }
+
+  function fmtRate(r){ return r.toLocaleString('es-VE', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
+  async function refreshRateStatus(){
+    const el = $('rateStatus'); if (!el) return;
+    const m = await loadManualRate();
+    $('clearRateBtn').style.display = m ? '' : 'none';
+    if (m){
+      const d = new Date(m.savedAt || Date.now());
+      const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+      el.textContent = 'Usando tu tasa: ' + fmtRate(m.rate) + ' Bs/€ (guardada el ' + d.toLocaleDateString('es-VE') + ')' +
+        (days >= 1 ? ' — ya pasó ' + (days === 1 ? '1 día' : days + ' días') + ', actualízala si cambió.' : '.');
+    } else {
+      el.textContent = 'Sin tasa propia: la app intenta obtenerla sola al hacer cada factura.';
+    }
+  }
+
+  $('saveRateBtn').addEventListener('click', async () => {
+    const r = parseRate($('manualRateInput').value);
+    if (!rateOk(r)){ showToast('Escribe la tasa en bolívares por 1 €, por ejemplo 1011,39'); return; }
+    try{ await window.storage.set('bcvManualRate', JSON.stringify({ rate: r, savedAt: Date.now() }), false); }catch(e){}
+    bcvCache = null;
+    $('manualRateInput').value = '';
+    await refreshRateStatus();
+    showToast('Tasa guardada: ' + fmtRate(r) + ' Bs/€');
+  });
+  $('clearRateBtn').addEventListener('click', async () => {
+    try{ await window.storage.set('bcvManualRate', '', false); }catch(e){}
+    bcvCache = null;
+    await refreshRateStatus();
+    showToast('Se usará la tasa automática');
+  });
+  $('autoRateBtn').addEventListener('click', async () => {
+    showToast('Consultando tasa...');
+    const r = await fetchBCVRate();
+    showToast(r ? 'Tasa automática: ' + fmtRate(r) + ' Bs/€ (' + lastRateSource + ')' : 'No se pudo obtener la tasa automática. Escríbela a mano.');
+  });
+  refreshRateStatus();
 
   function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, align){
     const words = text.split(' ');
